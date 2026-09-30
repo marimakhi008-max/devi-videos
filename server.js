@@ -5,7 +5,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,e
 CREATE TABLE IF NOT EXISTS payments(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,order_id TEXT,payment_id TEXT,plan TEXT,amount INTEGER,status TEXT,created_at TEXT);`);
 app.use(express.json()); app.use(express.urlencoded({extended:true}));
 app.use(session({secret:process.env.SESSION_SECRET||"dev-secret",resave:false,saveUninitialized:false,cookie:{httpOnly:true,sameSite:"lax"}}));
-app.use(express.static(path.join(__dirname,"public")));
+app.use(express.static(__dirname));
 
 const plans={monthly:{name:"Monthly",amount:9900,days:30},quarterly:{name:"Premium 3 Months",amount:24900,days:90},yearly:{name:"Yearly",amount:79900,days:365}};
 const rz=(process.env.RAZORPAY_KEY_ID&&process.env.RAZORPAY_KEY_SECRET)?new Razorpay({key_id:process.env.RAZORPAY_KEY_ID,key_secret:process.env.RAZORPAY_KEY_SECRET}):null;
