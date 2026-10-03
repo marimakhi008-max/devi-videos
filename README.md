@@ -1,24 +1,32 @@
-# Devi Videos — Membership Website
-
-## Run locally
-1. Install Node.js 18+.
-2. Run `npm install`.
-3. Copy `.env.example` to `.env`.
-4. Add your Razorpay **test** keys to `.env`.
-5. Run `npm start`.
-6. Open `http://localhost:3000`.
+# Devi Videos — ready to deploy
 
 ## Included
-- Tamil/English membership landing page
-- Monthly / 3-month / yearly plans
-- Email-based demo login
-- Razorpay order creation and server-side signature verification
-- SQLite membership database
-- Member dashboard and expiry date
+- Responsive membership landing page
+- Monthly ₹99 plan
+- Premium ₹249 / 3 months plan
+- Razorpay server-side order creation
+- Razorpay payment signature verification
+- Error handling that prevents `undefined` payment messages
+- Render `/health` endpoint
 
-## Production checklist
-- Use Razorpay live keys only after completing merchant/KYC setup.
-- Add HTTPS, a real email/OTP authentication system, CSRF/rate-limit protections, backups and secure session storage.
-- Store videos behind authenticated server/CDN access; do not expose private video URLs in public HTML.
-- Configure Razorpay webhooks and reconcile payment/refund/renewal events.
-- Add your business contact, refund policy, privacy policy, terms and age/content policy appropriate to your content.
+## Render settings
+Build Command: `npm install`
+Start Command: `npm start`
+
+Environment Variables:
+- `RAZORPAY_KEY_ID`
+- `RAZORPAY_KEY_SECRET`
+
+If those variables already exist in Render, EDIT their values. Do not create duplicate keys.
+
+After changing environment variables, redeploy/restart.
+
+## Test
+Open `/health` on your Render domain. It should show `razorpayConfigured: true`.
+
+Use Razorpay Test Mode first.
+
+## Security note
+The secret key is server-only. The browser receives only the key ID.
+
+This starter records successful membership status in the browser for the demo. For a production paid-video service, add user authentication, a persistent database, protected video delivery, and Razorpay webhooks so paid access is maintained across devices and payment events.

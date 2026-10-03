@@ -1,18 +1,82 @@
 require("dotenv").config();
-const express=require("express"), session=require("express-session"), Database=require("better-sqlite3"), Razorpay=require("razorpay"), crypto=require("crypto"), path=require("path");
-const app=express(), db=new Database("devi-videos.db");
-db.exec(`CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,email TEXT UNIQUE NOT NULL,plan TEXT,expires_at TEXT,active INTEGER DEFAULT 0);
-CREATE TABLE IF NOT EXISTS payments(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,order_id TEXT,payment_id TEXT,plan TEXT,amount INTEGER,status TEXT,created_at TEXT);`);
-app.use(express.json()); app.use(express.urlencoded({extended:true}));
-app.use(session({secret:process.env.SESSION_SECRET||"dev-secret",resave:false,saveUninitialized:false,cookie:{httpOnly:true,sameSite:"lax"}}));
-app.use(express.static(__dirname));
+const express = require("express");
+const path = require("path");
+const crypto = require("crypto");
+const Razorpay = require("razorpay");
 
-const plans={monthly:{name:"Monthly",amount:9900,days:30},quarterly:{name:"Premium 3 Months",amount:24900,days:90},yearly:{name:"Yearly",amount:79900,days:365}};
-const rz=(process.env.RAZORPAY_KEY_ID&&process.env.RAZORPAY_KEY_SECRET)?new Razorpay({key_id:process.env.RAZORPAY_KEY_ID,key_secret:process.env.RAZORPAY_KEY_SECRET}):null;
+const app = express();
+const PORT = process.env.PORT || 10000;
+app.use(express.json({limit:"100kb"}));
+app.use(express.urlencoded({extended:true}));
+app.use(express.static(path.join(__dirname,"public")));
 
-app.post("/api/login",(req,res)=>{const email=String(req.body.email||"").trim().toLowerCase();if(!email||!email.includes("@"))return res.status(400).json({error:"Valid email required"});let u=db.prepare("SELECT * FROM users WHERE email=?").get(email);if(!u){const r=db.prepare("INSERT INTO users(email) VALUES(?)").run(email);u=db.prepare("SELECT * FROM users WHERE id=?").get(r.lastInsertRowid)}req.session.userId=u.id;res.json({ok:true,user:u});});
-app.get("/api/me",(req,res)=>{if(!req.session.userId)return res.json({user:null});res.json({user:db.prepare("SELECT id,email,plan,expires_at,active FROM users WHERE id=?").get(req.session.userId)});});
-app.post("/api/create-order",(req,res)=>{if(!req.session.userId)return res.status(401).json({error:"Login required"});if(!rz)return res.status(503).json({error:"Payment gateway is not configured. Add Razorpay keys to .env."});const p=plans[req.body.plan];if(!p)return res.status(400).json({error:"Invalid plan"});rz.orders.create({amount:p.amount,currency:"INR",receipt:"devi_"+Date.now(),notes:{user_id:String(req.session.userId),plan:req.body.plan}}).then(o=>{db.prepare("INSERT INTO payments(user_id,order_id,plan,amount,status,created_at) VALUES(?,?,?,?,?,datetime('now'))").run(req.session.userId,o.id,req.body.plan,p.amount,"created");res.json({order:o,key:process.env.RAZORPAY_KEY_ID});}).catch(e=>res.status(500).json({error:e.message}));});
-app.post("/api/verify-payment",(req,res)=>{if(!req.session.userId)return res.status(401).json({error:"Login required"});const {razorpay_order_id,razorpay_payment_id,razorpay_signature,plan}=req.body;const expected=crypto.createHmac("sha256",process.env.RAZORPAY_KEY_SECRET).update(razorpay_order_id+"|"+razorpay_payment_id).digest("hex");if(expected!==razorpay_signature)return res.status(400).json({error:"Payment verification failed"});const p=plans[plan];const expiry=new Date(Date.now()+p.days*86400000).toISOString();db.prepare("UPDATE users SET plan=?,expires_at=?,active=1 WHERE id=?").run(p.name,expiry,req.session.userId);db.prepare("UPDATE payments SET payment_id=?,status='paid' WHERE order_id=?").run(razorpay_payment_id,razorpay_order_id);res.json({ok:true});});
-app.post("/api/logout",(req,res)=>req.session.destroy(()=>res.json({ok:true})));
-app.listen(process.env.PORT||3000,()=>console.log("Devi Videos running on http://localhost:"+(process.env.PORT||3000)));
+const keyId = process.env.RAZORPAY_KEY_ID;
+const keySecret = process.env.RAZORPAY_KEY_SECRET;
+const razorpay = (keyId && keySecret) ? new Razorpay({key_id:keyId,key_secret:keySecret}) : null;
+
+const PLANS = {
+  monthly:{id:"monthly",name:"Monthly",amount:99,duration:"1 month"},
+  premium:{id:"premium",name:"Premium",amount:249,duration:"3 months"}
+};
+
+app.get("/health",(req,res)=>res.json({
+  ok:true, service:"devi-videos", razorpayConfigured:Boolean(razorpay),
+  time:new Date().toISOString()
+}));
+
+app.get("/api/config",(req,res)=>res.json({
+  key_id:keyId||null, currency:"INR", plans:PLANS
+}));
+
+app.post("/api/create-order",async(req,res)=>{
+  try{
+    if(!razorpay) return res.status(500).json({
+      success:false,
+      error:"Razorpay is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in Render."
+    });
+    const plan=PLANS[String(req.body?.planId||"")];
+    if(!plan) return res.status(400).json({success:false,error:"Invalid plan selected."});
+
+    const order=await razorpay.orders.create({
+      amount:plan.amount*100,
+      currency:"INR",
+      receipt:`dv_${plan.id}_${Date.now()}`,
+      notes:{plan_id:plan.id,plan_name:plan.name,duration:plan.duration}
+    });
+
+    res.json({
+      success:true,
+      order:{id:order.id,amount:order.amount,currency:order.currency},
+      key_id:keyId, plan
+    });
+  }catch(error){
+    console.error("CREATE ORDER ERROR:",error);
+    res.status(500).json({
+      success:false,
+      error:error?.error?.description||error?.description||error?.message||"Unable to create Razorpay order."
+    });
+  }
+});
+
+app.post("/api/verify-payment",(req,res)=>{
+  try{
+    const {razorpay_order_id,razorpay_payment_id,razorpay_signature}=req.body||{};
+    if(!razorpay_order_id||!razorpay_payment_id||!razorpay_signature)
+      return res.status(400).json({success:false,error:"Missing Razorpay payment details."});
+
+    const expected=crypto.createHmac("sha256",keySecret||"")
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`).digest("hex");
+
+    const valid=expected.length===String(razorpay_signature).length &&
+      crypto.timingSafeEqual(Buffer.from(expected),Buffer.from(String(razorpay_signature)));
+
+    if(!valid) return res.status(400).json({success:false,error:"Payment signature verification failed."});
+    res.json({success:true,message:"Payment verified successfully.",payment_id:razorpay_payment_id,order_id:razorpay_order_id});
+  }catch(error){
+    console.error("VERIFY PAYMENT ERROR:",error);
+    res.status(500).json({success:false,error:"Unable to verify payment."});
+  }
+});
+
+app.get("*",(req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
+app.listen(PORT,()=>console.log(`Devi Videos running on port ${PORT}`));
